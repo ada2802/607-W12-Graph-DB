@@ -1,0 +1,212 @@
+---
+title: "607HW12-1"
+author: "Chunmei Zhu & John Wong"
+date: "November 18, 2017"
+output: html_document
+---
+
+###Introduction of Neo4j
+
+It is a graph databases which can find relationship between data and extract their true value. Its service implemented in Java, which developed by the company Neo Technology. It has been widely used in fraud detection, real-time recommendations, social networks, data center management system.
+
+A graph in Neo4j is defined by consists of vertices and edges. There are several types of the graphs:undirected graphs, directed graphs, graphs with weight, graphs with labels, property graphs.
+
+Comparing MySQL I used in previous homework, Neo4j has difference ways to relate data. 
+
+1.Difference to relational database which use primary key attributes via foreign-key columns, Neo4j enable to build sophisticatedmodels by assembling the simple abstractions of nodes and relationship into connected structures.
+
+2. Relational database store highly structured data in tables with columns and many rows of same type of information. Each node in Neo4j in the graph database model directly and physically contains a list of relationship-records, which avoids heavy queuries to find the data.
+
+More details about the difference of graph db and relational db: https://neo4j.com/developer/graph-db-vs-rdbms/
+
+Load Libraries
+
+```{r }
+if (!require(RCurl)) install.packages('RCurl')
+if (!require(getPass)) install.packages('getPass')
+if (!require(RNeo4j)) install.packages('RNeo4j')
+if (!require(knitr)) install.packages('knitr')
+if (!require(png)) install.packages('jpeg')
+```
+
+PartI:Data Preparation
+
+R is an analysis tool to importe data to Neo4j database to build the relationship and manipulate the data we need throught Neo4j. In this assignment, we will use two data sets, one for airport and another for flight. 
+
+Load the raw data into R from my github which were download from cuny data files.
+
+```{r }
+airport_raw <- getURL("https://raw.githubusercontent.com/ada2802/607-W12-Graph-DB/master/neo4j-airport-csv-raw.csv")
+
+flight_raw <- getURL("https://raw.githubusercontent.com/ada2802/607-W12-Graph-DB/master/neo4j-flight-lab-data.csv")
+
+airport <- read.csv(textConnection(airport_raw), header=T)
+
+flight <- read.csv(textConnection(flight_raw), header=T)
+```
+
+Get connection to Neo4j 
+
+```{r }
+library(RNeo4j)
+
+library(getPass)
+
+neo4j <- getPass::getPass("Enter Neo4J username")
+Password <- getPass::getPass("Enter Neo4J password")
+
+graph = startGraph("http://127.0.0.1:7474/db/data/",
+                   username = neo4j,
+                   password = Password)
+
+clear(graph, input = FALSE)
+```
+
+Creat an object airport and store each row data of the airport table to a node in Neo4j. There are three attributions for each node - code of the airport, city and state.
+
+```{r }
+addConstraint(graph, "airport","label")
+
+nrow <- length(airport$label)
+
+for(i in 1:nrow)
+{
+  createNode(graph, "airport", 
+             label = airport[i,]$label,
+             code=airport[i,]$label, 
+             city=airport[i,]$city,
+             state = airport[i,]$state
+             )
+  
+}
+```
+
+Creat an object flight and store each row data of the flight table to a node in Neo4j.  There are two attributions for each node - airline and capacity.
+
+
+```{r }
+nflight <- length(flight$flight)
+for(i in 1:nflight)
+{
+  createNode(graph, "flights",
+             flight = flight[i,]$flight,
+             airline = flight[i,]$airline,
+             capacity = flight[i,]$capacity
+             )
+}
+```
+
+Build the relationship between airport and flight and query landing time by match the conection in Neo4j.
+
+```{r }
+query = "match (a:airport {code:{airport_code}}), (b:flights {flight:{flight_num}}) create (b) -[r:Arrive {landing:{landing_time}}]->(a)"
+
+t = newTransaction(graph)
+for(i in 1:nflight)
+{
+  airport_code = flight[i,]$arrive
+  flight_num = flight[i,]$flight
+  landing_time = flight[i,]$landing
+  
+  appendCypher(t, query, airport_code = airport_code, flight_num = flight_num,landing_time = landing_time)
+  
+}
+commit(t)
+```
+
+Build the relationship between airport and flight and query takeoff time by match the conection in Neo4j.
+
+```{r }
+query = "match (a:airport {code:{airport_code}}), (b:flights {flight:{flight_num}}) create (a) -[r:Depart {takeoff:{takeoff_time}}]->(b)"
+
+t = newTransaction(graph)
+for(i in 1:nflight)
+{
+  airport_code = flight[i,]$depart
+  flight_num = flight[i,]$flight
+  takeoff_time = flight[i,]$takeoff
+  
+  appendCypher(t, query, airport_code = airport_code,flight_num = flight_num, takeoff_time = takeoff_time )
+  
+}
+commit(t)
+```
+
+Connect depart airport, flights and arrive airport, which connect all nodes - flights and airport in Neo4j.neo4j
+
+```{r }
+query = "MATCH (d:airport)-[t:Depart]->(f:flights)-[l:Arrive]->(a:airport)
+RETURN d.label as FromAirport,t.takeoff as TakeOff, f.airline as AirLine, f.flight as FlightNum,l.landing as Landing, a.label as ToAirport"
+
+match_table = cypher(graph, query)
+
+kable(match_table)
+```
+
+Part II: Data Analysis
+
+Now that we have some data loaded, let's answer some basic questions. Write Cypher queries to answer each of the
+following:
+
+7. Return all flights that run from Detroit to Atlanta.
+match (n:Airport) return n
+
+```{r }
+query = "MATCH (d:airport)-->(f:flights)-->(a:airport) where d.code = 'DTW' and a.code = 'ATL'
+RETURN d.label as FromAirport, f.airline as AirLine, f.flight as FlightNum, a.label as ToAirport"
+
+DTW_To_ATL = cypher(graph, query)
+
+kable(DTW_To_ATL)
+```
+
+
+Part III: Data Modification
+
+Let's make a few simple changes to our data. Perform the following tasks:
+15. Suppose the Pittsburgh airport designation code has been changed from PIT to PGH. Write a query to
+update the airport's code.
+match (a:airport {label: 'PIT'}) set a.label = 'PGH' return a
+
+```{r }
+#get value "PGH" of from the airport talbe which match "PIT"  
+Pittsburgh_node = getNodes(graph, "Match (a:airport) where a.code = 'PIT' return a ")
+
+#replace the value from code list
+Pittsburgh_node = Pittsburgh_node[[1]]
+```
+
+17. Southwest has cancelled all flights between Detroit and Boston. Write a query that removes all such flights.
+You can remove flights in each direction with separate queries as follows:
+
+match (b:Airport {label: 'BOS'})-[r:Arrives]-(f:Flight {airline: 'Southwest'})-[d:Departs]-(a:Airport
+{label: 'DTW'}) delete f,r,d
+match (b:Airport {label: 'DTW'})-[r:Arrives]-(f:Flight {airline: 'Southwest'})-[d:Departs]-(a:Airport
+{label: 'BOS'}) remove f,r,d
+
+Alternatively, you can remove all of them at once with:
+match (b:Airport {label: 'BOS'})-[r]-(f:Flight {airline: 'Southwest'})-[d]-(a:Airport {label: 'DTW'})
+delete f,r,d
+
+Notice that this single query sets up the basic pattern but does not specify which relationship is Arrives and
+which is Departs.
+
+```{r }
+#get the flight from both directions between DTW and BOS
+query = "match (a:airport)-[d:Depart]->(f:flights)-[l:Arrive]->(b:airport) where (a.code = 'DTW' or a.code = 'BOS') and (b.code = 'BOS' or b.code = 'DTW') and f.airline = 'Southwest' delete d, f, l"
+ 
+ cypher(graph, query)
+```
+
+Part IV: Clean Up
+
+Once all of the lab has been completed, you may wish to remove the data from the database. What query removes
+all nodes and relationships from the database?
+
+```{r }
+query = "match (a) optional match (a)-[r]-() delete a,r"
+ 
+cypher(graph, query)
+```
+
+
